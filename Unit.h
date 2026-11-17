@@ -17,6 +17,9 @@ public:
     Attack getAttack() const;
     int getX() const;
     int getY() const;
+    // move меняет только собственные координаты юнита; для юнита, стоящего
+    // на поле, перемещение выполняется через GameField::moveUnit, чтобы сетка
+    // и координаты не рассинхронизировались.
     void move(int newX, int newY);
     void takeDamage(int damage);
 

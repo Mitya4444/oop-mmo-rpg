@@ -1,8 +1,10 @@
 #include "GameField.h"
 
-#include "UnitFactory.h"
-
+#include <memory>
+#include <stdexcept>
 #include <utility>
+
+#include "UnitFactory.h"
 
 GameField::GameField(int width, int height, int maxUnits)
     : width(width > 0 ? width : 0),
@@ -80,11 +82,11 @@ bool GameField::addUnit(const UnitFactory& factory, UnitKind kind, int x, int y)
     if (!insideBounds(x, y) || cells[y][x] != nullptr || unitCount >= maxUnits) {
         return false;
     }
-    Unit* unit = factory.createUnit(kind, x, y);
-    if (unit == nullptr) {
+    std::unique_ptr<Unit> unit(factory.createUnit(kind, x, y));
+    if (!unit || unit->getX() != x || unit->getY() != y) {
         return false;
     }
-    cells[y][x] = unit;
+    cells[y][x] = unit.release();
     ++unitCount;
     return true;
 }
@@ -99,11 +101,29 @@ bool GameField::removeUnit(int x, int y) {
     return true;
 }
 
-Unit* GameField::getUnit(int x, int y) {
-    if (!insideBounds(x, y)) {
-        return nullptr;
+bool GameField::moveUnit(int fromX, int fromY, int toX, int toY) {
+    if (!insideBounds(fromX, fromY) || !insideBounds(toX, toY)) {
+        return false;
     }
-    return cells[y][x];
+    if (cells[fromY][fromX] == nullptr || cells[toY][toX] != nullptr) {
+        return false;
+    }
+    if (fromX == toX && fromY == toY) {
+        return true;
+    }
+    Unit* unit = cells[fromY][fromX];
+    cells[fromY][fromX] = nullptr;
+    cells[toY][toX] = unit;
+    unit->move(toX, toY);
+    return true;
+}
+
+bool GameField::damageUnit(int x, int y, int damage) {
+    if (!insideBounds(x, y) || cells[y][x] == nullptr) {
+        return false;
+    }
+    cells[y][x]->takeDamage(damage);
+    return true;
 }
 
 const Unit* GameField::getUnit(int x, int y) const {
@@ -147,24 +167,55 @@ bool GameField::insideBounds(int x, int y) const {
     return x >= 0 && x < width && y >= 0 && y < height;
 }
 
-GameFieldIterator GameField::begin() {
-    GameFieldIterator it(this, 0, 0);
+GameField::iterator GameField::begin() {
+    iterator it(this, 0, 0);
     it.skipEmpty();
     return it;
 }
 
-GameFieldIterator GameField::end() {
-    return GameFieldIterator(this, width, height);
+GameField::iterator GameField::end() {
+    return iterator(this, width, height);
 }
+
+GameField::const_iterator GameField::begin() const {
+    return cbegin();
+}
+
+GameField::const_iterator GameField::end() const {
+    return cend();
+}
+
+GameField::const_iterator GameField::cbegin() const {
+    const_iterator it(this, 0, 0);
+    it.skipEmpty();
+    return it;
+}
+
+GameField::const_iterator GameField::cend() const {
+    return const_iterator(this, width, height);
+}
+
+GameFieldIterator::GameFieldIterator()
+    : field(nullptr), x(0), y(0) {}
 
 GameFieldIterator::GameFieldIterator(GameField* field, int x, int y)
     : field(field), x(x), y(y) {}
 
-Unit* GameFieldIterator::operator*() const {
-    return field->cells[y][x];
+GameFieldIterator::reference GameFieldIterator::operator*() const {
+    if (field == nullptr || y >= field->height || x >= field->width || field->cells[y][x] == nullptr) {
+        throw std::out_of_range("GameFieldIterator: dereference of empty cell");
+    }
+    return *field->cells[y][x];
+}
+
+GameFieldIterator::pointer GameFieldIterator::operator->() const {
+    return &operator*();
 }
 
 GameFieldIterator& GameFieldIterator::operator++() {
+    if (field == nullptr || y >= field->height) {
+        return *this;
+    }
     ++x;
     if (x >= field->width) {
         x = 0;
@@ -174,11 +225,86 @@ GameFieldIterator& GameFieldIterator::operator++() {
     return *this;
 }
 
+GameFieldIterator GameFieldIterator::operator++(int) {
+    GameFieldIterator previous = *this;
+    ++(*this);
+    return previous;
+}
+
+bool GameFieldIterator::operator==(const GameFieldIterator& other) const {
+    return field == other.field && x == other.x && y == other.y;
+}
+
 bool GameFieldIterator::operator!=(const GameFieldIterator& other) const {
-    return field != other.field || x != other.x || y != other.y;
+    return !(*this == other);
 }
 
 void GameFieldIterator::skipEmpty() {
+    if (field == nullptr) {
+        return;
+    }
+    while (y < field->height) {
+        while (x < field->width) {
+            if (field->cells[y][x] != nullptr) {
+                return;
+            }
+            ++x;
+        }
+        x = 0;
+        ++y;
+    }
+    x = field->width;
+    y = field->height;
+}
+
+ConstGameFieldIterator::ConstGameFieldIterator()
+    : field(nullptr), x(0), y(0) {}
+
+ConstGameFieldIterator::ConstGameFieldIterator(const GameField* field, int x, int y)
+    : field(field), x(x), y(y) {}
+
+ConstGameFieldIterator::reference ConstGameFieldIterator::operator*() const {
+    if (field == nullptr || y >= field->height || x >= field->width || field->cells[y][x] == nullptr) {
+        throw std::out_of_range("ConstGameFieldIterator: dereference of empty cell");
+    }
+    return *field->cells[y][x];
+}
+
+ConstGameFieldIterator::pointer ConstGameFieldIterator::operator->() const {
+    return &operator*();
+}
+
+ConstGameFieldIterator& ConstGameFieldIterator::operator++() {
+    if (field == nullptr || y >= field->height) {
+        return *this;
+    }
+    ++x;
+    if (x >= field->width) {
+        x = 0;
+        ++y;
+    }
+    skipEmpty();
+    return *this;
+}
+
+ConstGameFieldIterator ConstGameFieldIterator::operator++(int) {
+    ConstGameFieldIterator previous = *this;
+    ++(*this);
+    return previous;
+}
+
+bool ConstGameFieldIterator::operator==(const ConstGameFieldIterator& other) const {
+    return field == other.field && x == other.x && y == other.y;
+}
+
+bool ConstGameFieldIterator::operator!=(const ConstGameFieldIterator& other) const {
+    return !(*this == other);
+}
+
+void ConstGameFieldIterator::skipEmpty() {
+    if (field == nullptr) {
+        return;
+    }
     while (y < field->height) {
         while (x < field->width) {
             if (field->cells[y][x] != nullptr) {
